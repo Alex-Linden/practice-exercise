@@ -1,4 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi.responses import StreamingResponse
+import asyncio
+import json
 from sqlalchemy.orm import Session
 from typing import List
 from ..db import get_db
@@ -6,6 +9,37 @@ from ..models import Item
 from ..schemas import ItemIn, ItemOut
 
 router = APIRouter(prefix="/items", tags=["items"])
+
+
+# Simple in-process SSE event manager
+class _EventManager:
+    def __init__(self) -> None:
+        self._listeners: set[asyncio.Queue[str]] = set()
+
+    def subscribe(self) -> asyncio.Queue[str]:
+        q: asyncio.Queue[str] = asyncio.Queue(maxsize=100)
+        self._listeners.add(q)
+        return q
+
+    def unsubscribe(self, q: asyncio.Queue[str]) -> None:
+        self._listeners.discard(q)
+
+    def publish(self, payload: dict) -> None:
+        data = json.dumps(payload, separators=(",", ":"))
+        stale: list[asyncio.Queue[str]] = []
+        for q in list(self._listeners):
+            try:
+                q.put_nowait(data)
+            except asyncio.QueueFull:
+                stale.append(q)
+        for q in stale:
+            self._listeners.discard(q)
+
+
+events = _EventManager()
+
+def _item_dict(obj: Item) -> dict:
+    return {"id": obj.id, "title": obj.title, "description": obj.description}
 
 
 @router.get("", response_model=List[ItemOut])
@@ -44,6 +78,10 @@ def create_item(payload: ItemIn, db: Session = Depends(get_db)):
     db.add(obj)
     db.commit()
     db.refresh(obj)
+    try:
+        events.publish({"type": "created", "item": _item_dict(obj)})
+    except Exception:
+        pass
     return obj
 
 
@@ -56,6 +94,10 @@ def update_item(item_id: int, payload: ItemIn, db: Session = Depends(get_db)):
         setattr(obj, k, v)
     db.commit()
     db.refresh(obj)
+    try:
+        events.publish({"type": "updated", "item": _item_dict(obj)})
+    except Exception:
+        pass
     return obj
 
 
@@ -66,3 +108,34 @@ def delete_item(item_id: int, db: Session = Depends(get_db)):
         raise HTTPException(404, "Not found")
     db.delete(obj)
     db.commit()
+    try:
+        events.publish({"type": "deleted", "id": item_id})
+    except Exception:
+        pass
+
+
+@router.get("/events")
+async def items_events():
+    async def event_generator():
+        q = events.subscribe()
+        try:
+            # Initial comment to establish stream
+            yield ": connected\n\n"
+            while True:
+                try:
+                    msg = await asyncio.wait_for(q.get(), timeout=15)
+                    yield f"data: {msg}\n\n"
+                except asyncio.TimeoutError:
+                    # Heartbeat to keep connections alive through proxies
+                    yield ": heartbeat\n\n"
+        finally:
+            events.unsubscribe(q)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        },
+    )
