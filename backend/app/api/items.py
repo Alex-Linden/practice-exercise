@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 from typing import List
 from ..db import get_db
@@ -9,12 +9,33 @@ router = APIRouter(prefix="/items", tags=["items"])
 
 
 @router.get("", response_model=List[ItemOut])
-def list_items(q: str | None = Query(None), db: Session = Depends(get_db)):
+def list_items(
+    response: Response,
+    q: str | None = Query(None),
+    page: int | None = Query(None, ge=1),
+    page_size: int | None = Query(None, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
     query = db.query(Item)
     if q:
         like = f"%{q}%"
         query = query.filter(Item.title.ilike(like))
-    return query.order_by(Item.id.desc()).all()
+    query = query.order_by(Item.id.desc())
+
+    # If pagination parameters are provided, apply them and emit metadata headers
+    if (page is not None) or (page_size is not None):
+        if page is None or page_size is None:
+            raise HTTPException(400, "Both page and page_size must be provided")
+        total = query.count()
+        offset = (page - 1) * page_size
+        items = query.offset(offset).limit(page_size).all()
+        response.headers["X-Total-Count"] = str(total)
+        response.headers["X-Page"] = str(page)
+        response.headers["X-Page-Size"] = str(page_size)
+        return items
+
+    # Default: maintain previous behavior (no pagination applied)
+    return query.all()
 
 
 @router.post("", response_model=ItemOut, status_code=201)

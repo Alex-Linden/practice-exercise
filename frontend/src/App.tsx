@@ -1,9 +1,9 @@
 import * as React from "react";
-import { api } from "./api"
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { api } from "./api";
+import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Container, Box, Button, TextField, List, ListItem, ListItemText,
-  IconButton, Dialog, DialogTitle, DialogContent, DialogActions
+  IconButton, Dialog, DialogTitle, DialogContent, DialogActions, CircularProgress, Typography
 } from "@mui/material";
 import DeleteIcon from "@mui/icons-material/Delete";
 
@@ -12,10 +12,41 @@ type Item = { id: number; title: string; description: string; };
 export default function App() {
   const qc = useQueryClient();
   const [q, setQ] = React.useState("");
-  const { data = [] } = useQuery<Item[]>({
+  const PAGE_SIZE = 20;
+
+  type Page = { items: Item[]; total: number; page: number; };
+
+  const {
+    data,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+    status,
+    isPending,
+  } = useInfiniteQuery<Page>({
     queryKey: ["items", q],
-    queryFn: async () => (await api.get("/items", { params: { q } })).data,
+    initialPageParam: 1,
+    queryFn: async ({ pageParam }) => {
+      const resp = await api.get<Item[]>("/items", {
+        params: { q, page: pageParam, page_size: PAGE_SIZE },
+      });
+      const total = Number(resp.headers["x-total-count"] ?? 0);
+      return { items: resp.data, total, page: Number(pageParam) };
+    },
+    getNextPageParam: (lastPage, allPages) => {
+      const loaded = allPages.reduce((sum, p) => sum + p.items.length, 0);
+      // Stop if fewer than a full page or we've reached total
+      if (lastPage.items.length < PAGE_SIZE) return undefined;
+      if (lastPage.total && loaded >= lastPage.total) return undefined;
+      return lastPage.page + 1;
+    },
   });
+
+  const flatItems: Item[] = React.useMemo(
+    () => data?.pages.flatMap(p => p.items) ?? [],
+    [data]
+  );
+  console.log(flatItems);
 
   const create = useMutation({
     mutationFn: (body: Omit<Item, "id">) => api.post("/items", body),
@@ -31,6 +62,21 @@ export default function App() {
   const [title, setTitle] = React.useState("");
   const [desc, setDesc] = React.useState("");
 
+  // Infinite scroll sentinel
+  const loadMoreRef = React.useRef<HTMLDivElement | null>(null);
+  React.useEffect(() => {
+    const el = loadMoreRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver((entries) => {
+      const first = entries[0];
+      if (first.isIntersecting && hasNextPage && !isFetchingNextPage) {
+        fetchNextPage();
+      }
+    }, { root: null, rootMargin: "200px", threshold: 0 });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [fetchNextPage, hasNextPage, isFetchingNextPage, q]);
+
   return (
     <Container maxWidth="md">
       <Box my={3} display="flex" gap={2} alignItems="center">
@@ -39,7 +85,7 @@ export default function App() {
       </Box>
 
       <List>
-        {data.map(i => (
+        {flatItems.map(i => (
           <ListItem
             key={i.id}
             secondaryAction={
@@ -52,6 +98,18 @@ export default function App() {
           </ListItem>
         ))}
       </List>
+
+      {/* Status indicators and sentinel */}
+      <Box display="flex" justifyContent="center" my={2}>
+        {isPending && <CircularProgress size={24} />}
+      </Box>
+      <Box ref={loadMoreRef} height={1} />
+      <Box display="flex" justifyContent="center" my={2}>
+        {isFetchingNextPage && <CircularProgress size={24} />}
+        {!hasNextPage && !isPending && flatItems.length > 0 && (
+          <Typography variant="body2" color="text.secondary">No more results</Typography>
+        )}
+      </Box>
 
       <Dialog open={open} onClose={() => setOpen(false)}>
         <DialogTitle>Create Item</DialogTitle>

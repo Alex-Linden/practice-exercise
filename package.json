@@ -6,7 +6,8 @@
     "scripts": {
     "dev:backend": "backend/venv/bin/python3 -m uvicorn --app-dir backend app.main:app --reload --port 8000",
     "dev:frontend": "cd frontend && npm run dev",
-    "dev": "npm-run-all --parallel dev:backend dev:frontend"
+    "dev": "npm-run-all --parallel dev:backend dev:frontend",
+    "seed": "backend/venv/bin/python3 -m backend.app.seed --count 300 --reset"
   },
   "keywords": [],
   "author": "",
