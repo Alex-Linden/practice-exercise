@@ -3,8 +3,8 @@
   "version": "1.0.0",
   "description": "",
   "main": "index.js",
-  "scripts": {
-    "dev:backend": "cd backend && . .venv/bin/activate 2>/dev/null || true; uvicorn app.main:app --reload --port 8000",
+    "scripts": {
+    "dev:backend": "backend/venv/bin/python3 -m uvicorn --app-dir backend app.main:app --reload --port 8000",
     "dev:frontend": "cd frontend && npm run dev",
     "dev": "npm-run-all --parallel dev:backend dev:frontend"
   },
