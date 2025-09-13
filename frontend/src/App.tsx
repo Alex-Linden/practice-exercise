@@ -38,7 +38,36 @@ export default function App() {
     onSuccess: (created, _vars, ctx) => {
       qc.setQueryData<InfiniteData<ItemsPage>>(["items", q], (old) => {
         if (!old) return old;
-        const pages = old.pages.map(p => ({ ...p, items: p.items.map(it => it.id === ctx?.tempId ? created : it) }));
+        const pages = old.pages.map(p => ({ ...p, items: [...p.items] }));
+        let removedDup = 0;
+        // Remove any duplicate occurrences of the created id (e.g., from SSE race)
+        for (const p of pages) {
+          for (let i = p.items.length - 1; i >= 0; i--) {
+            if (p.items[i].id === created.id) {
+              p.items.splice(i, 1);
+              removedDup += 1;
+            }
+          }
+        }
+        // Replace temp with created if present; otherwise prepend
+        let replacedTemp = false;
+        for (const p of pages) {
+          const idx = p.items.findIndex(it => it.id === ctx?.tempId);
+          if (idx >= 0) {
+            p.items[idx] = created;
+            replacedTemp = true;
+            break;
+          }
+        }
+        if (!replacedTemp) {
+          if (pages[0]) {
+            pages[0].items.unshift(created);
+            if (pages[0].items.length > PAGE_SIZE) pages[0].items.pop();
+          }
+        }
+        if (removedDup > 0) {
+          for (const p of pages) p.total = Math.max(0, (p.total || 0) - removedDup);
+        }
         return { ...old, pages };
       });
     },

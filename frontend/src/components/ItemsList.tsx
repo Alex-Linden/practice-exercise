@@ -73,9 +73,22 @@ export default function ItemsList({ q, onEdit, onDelete }: Props) {
             const pages = old.pages.map(p => ({ ...p, items: [...p.items] }));
             const first = pages[0];
             if (!first) return old;
+            // If a temporary item (negative id) matches by content, replace it in place
+            let replacedTemp = false;
+            for (const p of pages) {
+              const idx = p.items.findIndex(
+                it => it.id < 0 && it.title === msg.item.title && it.description === msg.item.description
+              );
+              if (idx >= 0) {
+                p.items[idx] = msg.item as Item;
+                replacedTemp = true;
+                break;
+              }
+            }
+            if (replacedTemp) {
+              return { ...old, pages };
+            }
             const exists = pages.some(p => p.items.some(it => it.id === msg.item.id));
-            // Bump totals
-            for (const p of pages) p.total = (p.total || 0) + (exists ? 0 : 1);
             if (exists) {
               // Replace existing
               for (const p of pages) {
@@ -83,8 +96,10 @@ export default function ItemsList({ q, onEdit, onDelete }: Props) {
                 if (idx >= 0) p.items[idx] = msg.item as Item;
               }
             } else {
+              // Prepend and bump totals
               first.items.unshift(msg.item as Item);
               if (first.items.length > PAGE_SIZE) first.items.pop();
+              for (const p of pages) p.total = (p.total || 0) + 1;
             }
             return { ...old, pages };
           });
